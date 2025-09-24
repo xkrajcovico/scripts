@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Paste files from clipboard content copied with vyber
+die() { echo "Error: $1" >&2; exit 1; }
+
+# Get clipboard content
+get_clipboard() {
+    if ! content=$(xclip -selection clipboard -o 2>/dev/null); then
+        die "Failed to read clipboard (is xclip installed?)"
+    fi
+    
+    if [[ -z "$content" ]]; then
+        die "Clipboard is empty or contains no text data"
+    fi
+    
+    echo "$content"
+}
+
+# Extract files from vyber-formatted content
+extract_files() {
+    local content="$1"
+    local base_dir="${2:-.}"
+    
+    # Split content into files based on === filename === pattern
+    echo "$content" | awk -v base_dir="$base_dir" '
+    /^=== .* ===$/ {
+        if (filename != "") {
+            close(filename)
+        }
+        filename = $2
+        # Clean up filename path
+        gsub(/^\.\//, "", filename)
+        filename = base_dir "/" filename
+        # Create directory if needed
+        cmd = "mkdir -p \"$(dirname \"\" filename \"\")\""
+        system(cmd)
+        print "Creating: " filename
+        next
+    }
+    filename != "" && !/^===/ {
+        if ($0 == "[Error reading file]" || $0 == "[Error: Not a file:]") {
+            print "Skipping invalid file entry"
+            filename = ""
+            next
+        }
+        print > filename
+    }'
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+Usage: vloz [destination_dir]
+Paste files from clipboard content copied with 'vyber'.
+
+Examples:
+  vloz                    # Paste to current directory
+  vloz ./project         # Paste to project directory
+  vloz /tmp/backup       # Paste to specific directory
+
+This recreates the file structure from vyber copies, including:
+- Single files
+- Multiple files  
+- Directory structures with --tree
+- All file patterns (*.java, *, etc.)
+
+Note: Uses clipboard content from xclip (Fedora default)
+EOF
+}
+
+# Main script
+if [[ $# -gt 1 ]]; then
+    show_usage
+    exit 1
+fi
+
+destination="${1:-.}"
+
+# Create destination if it doesn't exist
+if [[ ! -d "$destination" ]]; then
+    read -p "Destination '$destination' doesn't exist. Create it? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 0
+    fi
+    mkdir -p "$destination" || die "Failed to create destination directory"
+fi
+
+# Check if destination is writable
+if [[ ! -w "$destination" ]]; then
+    die "Destination directory is not writable: $destination"
+fi
+
+echo "Reading from clipboard..."
+content=$(get_clipboard)
+
+# Check if this is a tree structure or file content
+if [[ "$content" == "Copied directory structure"* ]] || \
+   [[ "$content" =~ ^[├└│┌──\ ] ]] || \
+   [[ "$content" =~ ^\.$ ]]; then
+    echo "Clipboard contains directory structure (from 'vyber --tree')"
+    echo "Use this for reference only - cannot recreate directory structure automatically"
+    echo
+    echo "Directory structure:"
+    echo "===================="
+    echo "$content"
+    exit 0
+fi
+
+# Check if this looks like vyber output
+if ! [[ "$content" =~ ^=== ]]; then
+    echo "Warning: Clipboard content doesn't look like vyber output."
+    echo "It may be plain text or from another source."
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 0
+    fi
+fi
+
+echo "Pasting files to: $destination"
+echo "==============================="
+
+# Extract files from clipboard content
+extract_files "$content" "$destination"
+
+echo "Done! Files have been pasted to $destination"

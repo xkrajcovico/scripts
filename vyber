@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# Function to handle errors
+handle_error() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+# Function to copy content to clipboard
+copy_to_clipboard() {
+    local content="$1"
+    if ! echo -ne "$content" | xclip -selection clipboard -i 2>/dev/null; then
+        if ! echo -ne "$content" | xsel --clipboard --input 2>/dev/null; then
+            handle_error "Failed to copy content to clipboard (tried xclip and xsel)"
+        fi
+    fi
+}
+
+# Function to process files and build content
+process_files() {
+    local pattern="$1"
+    local content=""
+    local temp_file=$(mktemp)
+    
+    # Use find with -print0 and read with -d '' to handle spaces in filenames
+    if [[ "$pattern" == "*" ]]; then
+        # Special case for all files
+        find_cmd="find . -type f -print0"
+    elif [[ "$pattern" == "*.java" ]]; then
+        # Special case for Java files
+        find_cmd="find . -type f -name '*.java' -print0"
+    else
+        # General pattern case
+        find_cmd="find . -type f -name '$pattern' -print0"
+    fi
+    
+    # Process each file found
+    while IFS= read -r -d '' file; do
+        {
+            echo "=== $file ==="
+            if [[ -f "$file" ]]; then
+                cat "$file" 2>/dev/null || echo "[Error reading file: $file]"
+            else
+                echo "[Error: Not a file: $file]"
+            fi
+            echo -e "\n"
+        } >> "$temp_file"
+    done < <(eval "$find_cmd" 2>/dev/null)
+    
+    # Check if we found any files
+    if [[ ! -s "$temp_file" ]]; then
+        rm -f "$temp_file"
+        handle_error "No files found matching pattern: $pattern"
+    fi
+    
+    content=$(<"$temp_file")
+    rm -f "$temp_file"
+    copy_to_clipboard "$content"
+}
+
+# Show usage if no arguments are provided
+if [ $# -eq 0 ]; then
+    echo "Usage: vyber [option|file|pattern]"
+    echo "Examples:"
+    echo "  vyber --tree         # Copies directory structure"
+    echo "  vyber *              # Copies all files recursively"
+    echo "  vyber *.java         # Copies all Java files recursively"
+    echo "  vyber Main.java      # Copies single file"
+    echo "  vyber .              # Copies files in current directory"
+    exit 1
+fi
+
+# Handle options and arguments
+case "$1" in
+    --tree)
+        if ! command -v tree &>/dev/null; then
+            handle_error "'tree' command not found. Please install it first."
+        fi
+        tree_output=$(tree -a -I '.*')
+        copy_to_clipboard "$tree_output"
+        echo "Copied directory structure to clipboard"
+        ;;
+    ".")
+        process_files "*"
+        echo "Copied all files in the current directory"
+        ;;
+    *)
+        if [[ -f "$1" ]]; then
+            # Single file case
+            if ! xclip -selection clipboard -i < "$1" 2>/dev/null; then
+                if ! xsel --clipboard --input < "$1" 2>/dev/null; then
+                    handle_error "Failed to copy file to clipboard (tried xclip and xsel)"
+                fi
+            fi
+            echo "Copied $1 to clipboard"
+        else
+            # Pattern case (like *.java or *)
+            process_files "$1"
+            echo "Copied all $1 files recursively"
+        fi
+        ;;
+esac

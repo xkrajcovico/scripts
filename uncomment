@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Remove comments from files
+remove_comments() {
+    local file="$1"
+    local temp_file=$(mktemp)
+    
+    # Skip binary files
+    if file "$file" | grep -q "text"; then
+        # Remove comments based on file type
+        case "$file" in
+            *.py)
+                # Python: # comments and docstrings
+                sed -E '/^[[:space:]]*#/d; /^[[:space:]]*""".*"""/d; /^[[:space:]]*'\''.*'\''/d' "$file" > "$temp_file"
+                ;;
+            *.java|*.c|*.cpp|*.h|*.hpp|*.js|*.ts|*.css)
+                # C-style: // and /* */ comments
+                sed -E ':a; s|/\*.*\*/||g; /\/\*/!b; N; ba' "$file" | sed '/^[[:space:]]*\/\//d' > "$temp_file"
+                ;;
+            *.sh|*.bash|*.zsh|*.yml|*.yaml|*.conf|*.cfg)
+                # Shell/config: # comments
+                sed '/^[[:space:]]*#/d' "$file" > "$temp_file"
+                ;;
+            *.html|*.xml)
+                # HTML/XML: <!-- --> comments
+                sed '/<!--/,/-->/d' "$file" > "$temp_file"
+                ;;
+            *.sql)
+                # SQL: -- and /* */ comments
+                sed -E '/^[[:space:]]*--/d; :a; s|/\*.*\*/||g; /\/\*/!b; N; ba' "$file" > "$temp_file"
+                ;;
+            *.lua)
+                # Lua: -- and --[[ ]] comments
+                sed -E '/^[[:space:]]*--/d; :a; s|--\[\[.*\]\]||g; /--\[\[/!b; N; ba' "$file" > "$temp_file"
+                ;;
+            *)
+                # Default: try to remove # comments
+                sed '/^[[:space:]]*#/d' "$file" > "$temp_file" 2>/dev/null || cp "$file" "$temp_file"
+                ;;
+        esac
+        
+        # Only replace if changes were made and file is not empty
+        if ! diff -q "$file" "$temp_file" >/dev/null && [[ -s "$temp_file" ]]; then
+            cp "$temp_file" "$file"
+            echo "✓ Processed: $file"
+        fi
+    else
+        echo "⚠ Skipped (binary): $file"
+    fi
+    
+    rm -f "$temp_file"
+}
+
+# Process files based on pattern
+process_pattern() {
+    local pattern="$1"
+    local find_cmd
+    
+    if [[ "$pattern" == "." ]]; then
+        # Current directory only
+        find_cmd=(find . -maxdepth 1 -type f)
+    elif [[ "$pattern" == "*" ]]; then
+        # All files recursively
+        find_cmd=(find . -type f)
+    else
+        # Specific pattern
+        find_cmd=(find . -type f -name "$pattern")
+    fi
+    
+    local file_count=0
+    while IFS= read -r file; do
+        [[ ! -f "$file" ]] && continue
+        remove_comments "$file"
+        ((file_count++))
+    done < <("${find_cmd[@]}" 2>/dev/null)
+    
+    if [[ $file_count -eq 0 ]]; then
+        echo "No files found matching: $pattern"
+    else
+        echo "Finished processing $file_count files"
+    fi
+}
+
+# Show usage
+show_usage() {
+    cat << EOF
+Usage: uncomment [pattern|file]
+Remove comments from files.
+
+Examples:
+  uncomment script.py          # Remove comments from single file
+  uncomment *.java            # Remove comments from all Java files
+  uncomment .                 # Remove comments from all files in current directory
+  uncomment *                 # Remove comments from all files recursively
+
+Supported file types: Python, Java/C/C++, JavaScript, Shell, HTML, SQL, Lua, etc.
+EOF
+}
+
+# Main script
+if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 1
+fi
+
+# Safety confirmation for broad patterns
+if [[ "$1" == "." || "$1" == "*" ]]; then
+    echo "WARNING: This will remove comments from ALL files in the "
+    if [[ "$1" == "*" ]]; then
+        echo "current directory AND all subdirectories!"
+    else
+        echo "current directory!"
+    fi
+    read -p "Are you sure? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Operation cancelled"
+        exit 0
+    fi
+fi
+
+# Handle single file or pattern
+if [[ -f "$1" ]]; then
+    remove_comments "$1"
+else
+    process_pattern "$1"
+fi
